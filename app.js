@@ -772,9 +772,9 @@ async function forceUpdateApp() {
           const regs = await navigator.serviceWorker.getRegistrations();
           await Promise.all(regs.map((r) => r.unregister()));
         }
-        // 4) 带时间戳重载，绕过 HTML 自身的缓存
-        const sep = location.href.includes('?') ? '&' : '?';
-        location.replace(location.href.split('?')[0] + sep + '_fv=' + Date.now());
+        // 4) 去掉原有查询参数和 hash，用干净的 URL 带上新时间戳重载
+        const base = location.href.split('?')[0].split('#')[0];
+        location.replace(base + '?_fv=' + Date.now());
       } catch (err) {
         console.warn('强制更新失败', err);
         toast('更新失败，请稍后重试');
