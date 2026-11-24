@@ -199,7 +199,7 @@ let deferredPrompt = null; // 浏览器提供的「安装到桌面」事件（�
 const state = {
   tab: 'home',
   events: [],
-  settings: { name: '宝宝', birth: '', quickAdd: false, theme: 'light', lastBackupAt: 0, backupDirName: '', defaultMl: 120, autoBackup: false },
+  settings: { name: '宝宝', birth: '', quickAdd: false, theme: 'light', lastBackupAt: 0, backupDirName: '', defaultMl: 120, defaultBrand: '', autoBackup: false },
   backupHandle: null,
   timelineFilter: 'all',
   statsRange: 7,
@@ -733,7 +733,7 @@ function renderSettings() {
         <button class="switch ${s.theme === 'dark' ? 'on' : ''}" data-act="toggle-theme" aria-label="深色模式开关"></button>
       </div>
       <button class="setting-row" data-act="edit-default-ml" style="width:100%;text-align:left">
-        <span class="sr-ico">🍼</span><span class="sr-body"><span class="sr-title">奶粉默认奶量</span><span class="sr-desc">每次记奶粉时的预填数值，可随时改</span></span><span class="sr-val">${s.defaultMl || 120} ml ›</span>
+        <span class="sr-ico">🍼</span><span class="sr-body"><span class="sr-title">奶粉默认设置</span><span class="sr-desc">每次记奶粉时预填奶量和品牌，可随时改</span></span><span class="sr-val">${s.defaultMl || 120} ml${s.defaultBrand ? ' · ' + esc(s.defaultBrand) : ''} ›</span>
       </button>
     </div>
     <div class="card">
@@ -844,18 +844,34 @@ function openInstallGuide() {
     <button class="btn ghost" data-act="close-overlay" style="margin-top:14px">知道了</button>`);
 }
 function openEditDefaultMl() {
+  const cur = state.settings.defaultBrand || '';
+  const presets = ['飞鹤1段', '飞鹤2段', '飞鹤3段', '美赞臣1段', '美素佳儿1段', 'a2 1段', '爱他美1段'];
   openSheet(`<div class="sheet-handle"></div>
-    <div class="sheet-head"><span class="sh-ico" style="background:#f6ab6222;color:#f6ab62">🍼</span><h2>奶粉默认奶量</h2><button class="close" data-act="close-overlay">✕</button></div>
+    <div class="sheet-head"><span class="sh-ico" style="background:#f6ab6222;color:#f6ab62">🍼</span><h2>奶粉默认设置</h2><button class="close" data-act="close-overlay">✕</button></div>
     <form id="ml-form">
-      ${formField('每次记奶粉时预填（ml）', `<input type="number" name="ml" inputmode="numeric" min="1" max="500" value="${state.settings.defaultMl || 120}">`)}
+      ${formField('默认奶量（ml）', `<input type="number" name="ml" inputmode="numeric" min="1" max="500" value="${state.settings.defaultMl || 120}">`)}
+      ${formField('默认奶粉品牌 / 段数', `<input type="text" name="brand" id="default-brand-input" value="${esc(cur)}" placeholder="例如：飞鹤1段，留空则不预填">`)}
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 14px">
+        ${presets.map((p) => `<button type="button" class="chip ${cur === p ? 'active' : ''}" data-act="preset-brand" data-brand="${esc(p)}">${esc(p)}</button>`).join('')}
+      </div>
       <button type="submit" class="btn" style="margin-top:6px">保存</button>
     </form>`);
+  // 快捷品牌点选：填入输入框并高亮
+  document.querySelectorAll('[data-act="preset-brand"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $('#default-brand-input').value = btn.dataset.brand;
+      document.querySelectorAll('[data-act="preset-brand"]').forEach((b) => b.classList.toggle('active', b === btn));
+    });
+  });
   $('#ml-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const v = clamp(Number(e.target.elements.ml.value) || 120, 1, 500);
-    state.settings.defaultMl = v;
-    await Store.setSetting('defaultMl', v);
-    closeSheet(); render(); toast(`默认奶量已设为 ${v} ml`);
+    const ml = clamp(Number(e.target.elements.ml.value) || 120, 1, 500);
+    const brand = e.target.elements.brand.value.trim();
+    state.settings.defaultMl = ml;
+    state.settings.defaultBrand = brand;
+    await Store.setSetting('defaultMl', ml);
+    await Store.setSetting('defaultBrand', brand);
+    closeSheet(); render(); toast(`默认设置已保存：${ml} ml${brand ? ' · ' + brand : ''}`);
   });
 }
 
@@ -886,7 +902,7 @@ function recordForm(type, ev) {
     case 'formula':
       body = formField('时间', timeField(t)) +
         formField('奶量（ml）', `<div class="stepper"><button type="button" data-act="ml-step" data-d="-10">−</button><input type="number" name="amount" inputmode="numeric" min="1" max="500" value="${d.amount || state.settings.defaultMl || 120}"><button type="button" data-act="ml-step" data-d="10">＋</button></div>`) +
-        formField('奶粉品牌 / 段数（选填）', `<input type="text" name="brand" value="${esc(d.brand || '')}" placeholder="例如：A2 一段">`);
+        formField('奶粉品牌 / 段数（选填）', `<input type="text" name="brand" value="${esc(d.brand || state.settings.defaultBrand || '')}" placeholder="例如：飞鹤1段">`);
       break;
     case 'poop':
       body = formField('时间', timeField(t)) +
@@ -1134,7 +1150,7 @@ document.addEventListener('change', async (e) => {
       await Store.save(ev); existing.add(ev.id); added++;
     }
     if (obj.settings) {
-      for (const k of ['name', 'birth', 'quickAdd', 'theme', 'defaultMl', 'autoBackup']) {
+      for (const k of ['name', 'birth', 'quickAdd', 'theme', 'defaultMl', 'defaultBrand', 'autoBackup']) {
         if (obj.settings[k] !== undefined) { state.settings[k] = obj.settings[k]; await Store.setSetting(k, obj.settings[k]); }
       }
     }
