@@ -1129,6 +1129,30 @@ window.addEventListener('appinstalled', () => { deferredPrompt = null; toast('�
   await loadData();
   render();
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW 注册失败', err)));
+    window.addEventListener('load', async () => {
+      try {
+        const reg = await navigator.serviceWorker.register('sw.js');
+        // 主动检查服务器是否有新版本
+        reg.update().catch(() => {});
+        // 发现新 SW 安装完成，让它跳过等待立即接管
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+              nw.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
+        // 新版本接管后自动刷新一次页面（用 sessionStorage 防止循环刷新）
+        let reloaded = sessionStorage.getItem('bl_autoreload');
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloaded) return;
+          reloaded = '1';
+          sessionStorage.setItem('bl_autoreload', '1');
+          window.location.reload();
+        });
+      } catch (err) { console.warn('SW 注册失败', err); }
+    });
   }
 })();
