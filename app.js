@@ -743,9 +743,44 @@ function renderSettings() {
       ${openGuideButtonHTML()}
     </div>
     <div class="card">
+      <div class="card-title">检查更新</div>
+      <p class="about-text" style="margin-bottom:10px">如果界面还是旧的、或想加载最新版本，点这里强制更新。你的记录不会丢失。</p>
+      <button class="btn ghost" data-act="force-update" style="width:100%">🔄 强制更新到最新版</button>
+    </div>
+    <div class="card">
       <div class="card-title">关于</div>
-      <p class="about-text">宝宝成长记录 v1.0 · 完全离线 · 无账号 · 不上传任何数据。<br>记录的每一件小事，都是长大的证据。</p>
+      <p class="about-text">宝宝成长记录 v1.1 · 完全离线 · 无账号 · 不上传任何数据。<br>记录的每一件小事，都是长大的证据。</p>
     </div>`;
+}
+
+/* ---------------- 强制更新（不删记录数据） ---------------- */
+async function forceUpdateApp() {
+  openConfirm(
+    '检查更新',
+    '这会清除旧版本缓存并重新加载最新版本。你的所有记录都会完整保留（记录存在独立数据库中，不会被清除）。如果已经是最新版，点一下也没有影响。',
+    async () => {
+      try {
+        // 1) 清掉所有 Cache Storage 缓存（只清 SW 资源缓存，不碰 IndexedDB/localStorage）
+        if (window.caches && caches.keys) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+        // 2) 清掉自动刷新标记，允许新 SW 接管后刷新一次
+        sessionStorage.removeItem('bl_autoreload');
+        // 3) 注销所有旧 Service Worker，让下次加载装全新的
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        }
+        // 4) 带时间戳重载，绕过 HTML 自身的缓存
+        const sep = location.href.includes('?') ? '&' : '?';
+        location.replace(location.href.split('?')[0] + sep + '_fv=' + Date.now());
+      } catch (err) {
+        console.warn('强制更新失败', err);
+        toast('更新失败，请稍后重试');
+      }
+    }
+  );
 }
 
 /* ---------------- 安装引导 ---------------- */
@@ -1058,6 +1093,7 @@ document.addEventListener('click', async (e) => {
         if (state.settings.autoBackup) scheduleAutoBackup();
         break;
       case 'install-guide': openInstallGuide(); break;
+      case 'force-update': forceUpdateApp(); break;
       case 'edit-default-ml': openEditDefaultMl(); break;
       case 'ml-step':
         { const input = el.parentElement.querySelector('input'); input.value = Math.max(1, (Number(input.value) || 0) + Number(el.dataset.d)); }
