@@ -751,37 +751,56 @@ function renderSettings() {
 /* ---------------- 安装引导 ---------------- */
 function isWechat() { return /MicroMessenger/i.test(navigator.userAgent); }
 function isIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+// 识别国内常见安卓浏览器，给出对应菜单位置
+function browserHint() {
+  const ua = navigator.userAgent;
+  if (/Quark/i.test(ua)) return { name: '夸克浏览器', menu: '点底部「三」菜单 → 工具箱/更多 → 找「添加到桌面」或「添加到主屏幕」' };
+  if (/UCBrowser|UC Browser/i.test(ua)) return { name: 'UC 浏览器', menu: '点底部「≡」菜单 → 设置 → 通用 → 「添加到主屏幕」' };
+  if (/MQQBrowser|QQBrowser/i.test(ua)) return { name: 'QQ 浏览器', menu: '点右上角「⋮」→ 找「添加到桌面」或「创建网站应用」' };
+  if (/baidubrowser|BaiduHD|baiduboxapp/i.test(ua)) return { name: '百度浏览器', menu: '点右上角「⋮」→ 「添加到主屏幕」' };
+  if (/MiuiBrowser/i.test(ua)) return { name: '小米浏览器', menu: '点底部菜单 → 找「添加到桌面」' };
+  if (/Edg/i.test(ua)) return { name: 'Edge 浏览器', menu: '点右上角「⋮」→ 「添加到主屏幕」' };
+  if (/Chrome/i.test(ua)) return { name: 'Chrome 浏览器', menu: '点右上角「⋮」→ 「安装应用」或「添加到主屏幕」' };
+  return { name: '当前浏览器', menu: '在浏览器菜单里找「添加到桌面」「添加到主屏幕」或「创建网站应用」' };
+}
 function openGuideButtonHTML() {
   return `<button class="btn ghost" data-act="install-guide">${isWechat() ? '⚠️ 微信里打开？看这里' : '查看添加到桌面步骤'}</button>`;
 }
+// 国产安卓系统创建快捷方式的权限说明
+const CN_PERMISSION_TIP = `<p class="about-text" style="margin-top:10px;color:#d98324">
+  <b>⚠️ 华为 / 小米 / OPPO / vivo 用户注意：</b>如果点了没反应或提示失败，去手机「设置 → 应用管理 → 找到你的浏览器 → 权限」里，把<b>「创建桌面快捷方式」</b>设为允许，再回来试一次。这是国产系统的常见限制，不是应用的问题。
+</p>`;
 function openInstallGuide() {
   const wechat = isWechat();
   const ios = isIOS();
+  const b = browserHint();
   let steps;
   if (wechat) {
     steps = `
       <p class="about-text" style="color:#d98324"><b>你现在是在微信里打开的，微信内置浏览器无法添加到桌面。</b></p>
       <p class="about-text">
-        <b>第一步 · 用系统浏览器打开</b><br>
-        点右上角「···」→ 选择「${ios ? '在 Safari 中打开' : '在浏览器中打开 / 用 Chrome 打开'}」。<br>
-        如果菜单里没有该选项，先点「保存到文件 / 下载」，再到${ios ? '「文件」App 里长按文件 → 共享 → Safari' : '「下载」目录点开并选择浏览器'}。
+        <b>第一步 · 用手机浏览器打开</b><br>
+        点右上角「···」→ 选择「${ios ? '在 Safari 中打开' : '在浏览器中打开'}」。如果菜单里没有，先点「保存到文件 / 下载」，再用${ios ? '「文件」App 长按文件 → 共享 → Safari' : '夸克 / 百度 / UC / QQ 浏览器等'}打开这个文件。
       </p>
       <p class="about-text" style="margin-top:10px">
         <b>第二步 · 添加到桌面</b><br>
         ${ios
-          ? '在 Safari 里点底部「分享」按钮 → 向下找到并点「添加到主屏幕」→ 确认。之后从桌面图标打开即可。'
-          : '在 Chrome 里点右上角「⋮」菜单 → 选「安装应用」或「添加到主屏幕」→ 确认。'}
-      </p>`;
+          ? '在 Safari 里点底部「分享」按钮 → 向下找到并点「添加到主屏幕」→ 确认。'
+          : '在浏览器菜单里找「添加到桌面」「添加到主屏幕」或「创建网站应用」→ 确认。'}
+      </p>
+      ${ios ? '' : CN_PERMISSION_TIP}`;
   } else {
     steps = `
       <p class="about-text">
-        <b>${ios ? 'iPhone · Safari' : '安卓 · Chrome / Edge'}</b><br>
+        <b>${ios ? 'iPhone · Safari' : `安卓 · ${b.name}`}</b><br>
         ${ios
           ? '点底部「分享」按钮 → 向下滑动找到「添加到主屏幕」→ 点右上角「添加」。之后从桌面图标打开，和 App 一样。'
-          : '点右上角「⋮」菜单 → 选「安装应用」或「添加到主屏幕」→ 确认即可。'}
+          : `${b.menu} → 确认即可。`}
       </p>
       ${deferredPrompt ? `<button class="btn" data-act="install" style="margin-top:12px">📲 直接添加到桌面</button>` : ''}
-      <p class="about-text" style="margin-top:10px">当前浏览器：${ios ? 'iPhone / iPad' : '安卓或其他'}。若菜单里找不到对应选项，换用 ${ios ? 'Safari' : 'Chrome'} 打开本文件即可。</p>`;
+      ${ios
+        ? `<p class="about-text" style="margin-top:10px">当前浏览器：iPhone / iPad。若菜单里找不到「添加到主屏幕」，请用 Safari 打开本页。</p>`
+        : `<p class="about-text" style="margin-top:10px">当前识别：<b>${b.name}</b>。不同浏览器菜单位置不同，找不到的就在菜单里翻翻「添加到桌面 / 添加到主屏幕 / 创建网站应用」。</p>${CN_PERMISSION_TIP}`}`;
   }
   openSheet(`<div class="sheet-handle"></div>
     <div class="sheet-head"><span class="sh-ico" style="background:#8fa9e822;color:#8fa9e8">📲</span><h2>添加到桌面</h2><button class="close" data-act="close-overlay">✕</button></div>
