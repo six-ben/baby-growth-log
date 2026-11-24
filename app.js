@@ -15,6 +15,8 @@ const TYPES = {
 };
 const CORE = ['breast', 'formula', 'pee', 'poop'];
 const EXTRA = ['sleep', 'solid', 'health', 'growth', 'note'];
+const FEED_TYPES = ['breast', 'formula'];
+const isFeed = (e) => !!e && FEED_TYPES.includes(e.type);
 const GROUPS = [
   { name: '喂养', types: ['breast', 'formula'], color: '#ff9aa2' },
   { name: '尿布', types: ['pee', 'poop'], color: '#f5cd57' },
@@ -60,6 +62,36 @@ function fmtDuration(min) {
   if (min < 60) return `${min}分钟`;
   const h = Math.floor(min / 60), m = min % 60;
   return m ? `${h}小时${m}分` : `${h}小时`;
+}
+/* 把毫秒时间差格式化成易读的间隔文案 */
+function fmtGap(ms) {
+  ms = Math.max(0, Math.round(Number(ms) || 0));
+  if (ms < 60000) return '刚刚';
+  const min = Math.round(ms / 60000);
+  if (min < 60) return `${min}分钟`;
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h < 24) return m ? `${h}小时${m}分` : `${h}小时`;
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? `${d}天${rh}小时` : `${d}天`;
+}
+/* 倒序列表中，第 i 条记录距上一条喝奶的间隔（毫秒）；非喝奶或无上次返回 null */
+function feedGapBefore(list, i) {
+  if (!isFeed(list[i])) return null;
+  for (let j = i + 1; j < list.length; j++) {
+    if (isFeed(list[j])) return list[i].timestamp - list[j].timestamp;
+  }
+  return null;
+}
+/* 一组记录里相邻两次喝奶的平均间隔（毫秒），排除异常长间隔 */
+function avgFeedGap(list) {
+  const feeds = (list || []).filter(isFeed).sort((a, b) => b.timestamp - a.timestamp);
+  if (feeds.length < 2) return null;
+  let sum = 0, cnt = 0;
+  for (let i = 0; i < feeds.length - 1; i++) {
+    const gap = feeds[i].timestamp - feeds[i + 1].timestamp;
+    if (gap > 0 && gap < 7 * 86400000) { sum += gap; cnt++; }
+  }
+  return cnt ? sum / cnt : null;
 }
 function ageString(birth) {
   if (!birth) return '设置生日后显示月龄';
@@ -269,14 +301,17 @@ function quickButton(type, sub = false) {
     <span>${t.short}</span>
   </button>`;
 }
-function eventRow(ev) {
+function eventRow(ev, gapMs = null) {
   const t = TYPES[ev.type] || TYPES.note;
   const detail = summary(ev) || (ev.note ? esc(ev.note) : t.name);
+  const gapHtml = (isFeed(ev) && gapMs != null && gapMs >= 0)
+    ? `<span class="event-gap">⏱ 距上次 ${fmtGap(gapMs)}</span>` : '';
   return `<button class="event-row" data-act="edit" data-id="${ev.id}" style="width:100%;text-align:left">
     <span class="event-ico" style="background:${t.color}22;color:${t.color}">${t.icon}</span>
     <span class="event-main">
       <span class="event-title">${esc(t.name)}</span>
       <span class="event-detail">${esc(detail)}</span>
+      ${gapHtml}
     </span>
     <span class="event-time">${fmtTime(ev.timestamp)}</span>
   </button>`;
@@ -287,6 +322,10 @@ function renderHome() {
   const ml = today.filter((e) => e.type === 'formula').reduce((s, e) => s + (Number(e.data?.amount) || 0), 0);
   const min = today.filter((e) => e.type === 'breast').reduce((s, e) => s + (Number(e.data?.duration) || 0), 0);
   const recent = state.events.slice(0, 5);
+  const todayFeeds = today.filter(isFeed);
+  const lastFeed = state.events.find(isFeed) || null;
+  const sinceLast = lastFeed ? Date.now() - lastFeed.timestamp : null;
+  const avgGapToday = avgFeedGap(today);
   $('#page').innerHTML = `
     <div class="baby-card">
       <div class="baby-avatar">👶</div>
@@ -329,9 +368,21 @@ function renderHome() {
       </div>
     </div>
 
+    <div class="card feed-gap-card">
+      <div class="card-title">喝奶间隔 <span class="more">母乳 + 奶粉</span></div>
+      <div class="gap-hero">
+        <div class="gap-big">${lastFeed && sinceLast != null && sinceLast >= 0 ? fmtGap(sinceLast) : '—'}</div>
+        <div class="gap-sub">${lastFeed ? `距上次喝奶 · ${fmtTime(lastFeed.timestamp)} 记录` : '还没有喝奶记录'}</div>
+      </div>
+      <div class="gap-foot">
+        <div><span>今日平均间隔</span><b>${avgGapToday != null ? fmtGap(avgGapToday) : '—'}</b></div>
+        <div><span>今日已喂</span><b>${todayFeeds.length} 次</b></div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-title">最近记录 <button class="more" data-act="tab" data-id="timeline">查看全部 ›</button></div>
-      ${recent.length ? `<div class="event-list">${recent.map(eventRow).join('')}</div>`
+      ${recent.length ? `<div class="event-list">${recent.map((ev, i) => eventRow(ev, feedGapBefore(state.events, i))).join('')}</div>`
         : `<div class="empty"><div class="e-ico">🍼</div><p>还没有记录，点上面的按钮开始吧</p></div>`}
     </div>`;
 }
@@ -343,14 +394,15 @@ function renderTimeline() {
   if (f !== 'all') list = list.filter((e) => e.type === f);
   let html = '';
   let lastDay = '';
-  for (const ev of list) {
+  for (let i = 0; i < list.length; i++) {
+    const ev = list[i];
     const k = dayKey(ev.timestamp);
     if (k !== lastDay) {
       const label = isToday(ev.timestamp) ? '今天' : isYesterday(ev.timestamp) ? '昨天' : fmtDate(ev.timestamp);
       html += `<div class="day-group">${label}</div>`;
       lastDay = k;
     }
-    html += eventRow(ev);
+    html += eventRow(ev, feedGapBefore(list, i));
   }
   const chips = [{ id: 'all', name: '全部' }].concat(Object.keys(TYPES).map((k) => ({ id: k, name: TYPES[k].short })));
   $('#page').innerHTML = `
@@ -481,6 +533,7 @@ function renderStats() {
   const breastMin = num(['breast'], 'duration');
   const formulaMl = num(['formula'], 'amount');
   const feedCount = filtered.filter((e) => ['breast', 'formula'].includes(e.type)).length;
+  const gapAvg = avgFeedGap(filtered);
   const diaperCount = filtered.filter((e) => ['pee', 'poop'].includes(e.type)).length;
   const sleepMin = num(['sleep'], 'duration');
   const avg = (v) => n ? Math.round(v / n * 10) / 10 : 0;
@@ -507,6 +560,10 @@ function renderStats() {
       <div class="metric"><div class="m-label">日均喂养</div><div class="m-value">${avg(feedCount)}<span class="m-unit">次/天</span></div></div>
       <div class="metric"><div class="m-label">日均尿布</div><div class="m-value">${avg(diaperCount)}<span class="m-unit">次/天</span></div></div>
       <div class="metric"><div class="m-label">日均睡眠</div><div class="m-value">${avg(sleepMin / 60)}<span class="m-unit">小时/天</span></div></div>
+      <div class="metric" style="grid-column:span 2">
+        <div class="m-label">平均喝奶间隔 <span style="font-weight:400">· 相邻两次母乳或奶粉</span></div>
+        <div class="m-value">${gapAvg != null ? fmtGap(gapAvg) : '—'}</div>
+      </div>
     </div>
 
     <div class="card" style="margin-top:14px">

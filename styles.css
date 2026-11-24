@@ -354,3 +354,20 @@ html[data-theme="dark"] .btn.danger { background: #3a2626; }
 .voice-txt small { font-size: 11px; color: var(--text-2); margin-top: 2px; }
 .voice-arrow { color: var(--text-3); font-size: 20px; }
 .voice-parsed { font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 8px 12px; border-radius: 10px; margin-bottom: 12px; }
+
+/* 喝奶间隔 */
+.event-gap {
+  display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 600;
+  color: #d98324; background: #fff2e2; padding: 2px 8px; border-radius: 6px;
+}
+html[data-theme="dark"] .event-gap { background: #3d2f1e; color: #f5c07a; }
+.feed-gap-card .gap-hero { text-align: center; padding: 16px 0 13px; }
+.feed-gap-card .gap-big { font-size: 34px; font-weight: 800; line-height: 1.1; color: var(--accent); }
+.feed-gap-card .gap-sub { font-size: 12px; color: var(--text-2); margin-top: 7px; }
+.feed-gap-card .gap-foot {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  border-top: 1px solid var(--border); padding-top: 12px;
+}
+.feed-gap-card .gap-foot > div { text-align: center; }
+.feed-gap-card .gap-foot span { display: block; font-size: 11px; color: var(--text-2); }
+.feed-gap-card .gap-foot b { display: block; font-size: 15px; margin-top: 4px; color: var(--text); }
