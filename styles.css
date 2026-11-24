@@ -335,3 +335,22 @@ html[data-theme="dark"] .btn.danger { background: #3a2626; }
   .app-shell { min-height: 100vh; }
   .tabbar { bottom: 0; }
 }
+
+/* 语音速记入口 */
+.voice-entry {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  background: linear-gradient(135deg, #fff0f3, #eef2ff);
+  border: 1px solid var(--border); border-radius: 14px;
+  padding: 12px 14px; margin-bottom: 14px; text-align: left; cursor: pointer;
+}
+.voice-entry:active { transform: scale(.99); }
+.voice-ico {
+  width: 42px; height: 42px; border-radius: 12px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 21px; background: #fff; box-shadow: var(--shadow);
+}
+.voice-txt { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.voice-txt b { font-size: 14px; color: var(--text); }
+.voice-txt small { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+.voice-arrow { color: var(--text-3); font-size: 20px; }
+.voice-parsed { font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 8px 12px; border-radius: 10px; margin-bottom: 12px; }

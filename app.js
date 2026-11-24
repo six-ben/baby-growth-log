@@ -309,6 +309,11 @@ function renderHome() {
 
     <div class="card">
       <div class="card-title">快捷记录 <span class="more">轻点即可记录</span></div>
+      <button class="voice-entry" data-act="voice">
+        <span class="voice-ico">🎤</span>
+        <span class="voice-txt"><b>语音速记</b><small>说一句「喝了120ml」，自动识别成记录</small></span>
+        <span class="voice-arrow">›</span>
+      </button>
       <div class="quick-grid">${CORE.map((t) => quickButton(t)).join('')}</div>
       <div class="section-label">更多记录</div>
       <div class="quick-sub" style="grid-template-columns:repeat(5,1fr)">${EXTRA.map((t) => quickButton(t, true)).join('')}</div>
@@ -1002,6 +1007,154 @@ function openRecord(type, id) {
     closeSheet(); render(); toast(ev ? '已更新记录' : '已保存记录');
   });
 }
+/* ---------------- 语音速记（本地智能解析，不上传） ---------------- */
+// 从中文口语里解析出记录意图：类型 / 数值 / 品牌 / 时间
+function parseVoiceText(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const r = { type: 'note', data: {}, amount: null, duration: null, temp: null, brand: '', note: text, conf: 0 };
+
+  // —— 类型识别（按优先级，先匹配更具体的）——
+  const typeRules = [
+    { type: 'formula', re: /(奶粉|冲奶|喂奶粉|奶粉|喝奶|吃奶|配方奶|飞鹤|美赞臣|美素|a2|爱他美|金领冠|君乐宝|伊利|雀巢)/i },
+    { type: 'breast',  re: /(母乳|亲喂|喂奶|吸奶|左边|右边|左侧喂|右侧喂| Mastitis)/i },
+    { type: 'poop',    re: /(大便|臭臭|拉屎|便便|拉了|拉臭|屎)/ },
+    { type: 'pee',     re: /(尿尿|小便|嘘嘘|尿了|尿布|撒尿)/ },
+    { type: 'sleep',   re: /(睡觉|睡着了|入睡|睡眠|午睡|睡了.*小时|夜觉)/ },
+    { type: 'solid',   re: /(辅食|米粉|果泥|吃.*泥|添加辅食|吃辅食)/ },
+    { type: 'health',  re: /(体温|发烧|发热|温度|吃药|退烧|咳嗽|感冒|用药)/ },
+    { type: 'growth',  re: /(身高|体重|身长|头围|量了.*斤|公斤)/ }
+  ];
+  for (const rule of typeRules) {
+    if (rule.re.test(text)) { r.type = rule.type; r.conf = 1; break; }
+  }
+
+  // —— 数值 + 单位 ——
+  // 奶量：120ml / 120 毫升 / 喝了120
+  const ml = text.match(/(\d+(?:\.\d+)?)\s*(ml|毫升|ML|mL)/i) || text.match(/(?:喝|吃|喂|冲)\s*(\d{2,3})\b/);
+  if (ml) {
+    r.amount = Number(ml[1]);
+    // 有奶量(ml)且无母乳专属词时，判为奶粉（覆盖「喝了120ml」「喂奶120ml」等说法）
+    const breastWord = /(母乳|亲喂|左边|右边|左侧|右侧|吸奶)/.test(text);
+    if (!breastWord && (r.type === 'note' || r.type === 'breast')) { r.type = 'formula'; r.conf = 1; }
+  }
+  // 时长：15分钟 / 半小时 / 2小时
+  const min = text.match(/(\d+(?:\.\d+)?)\s*(分钟|分|min)/i);
+  const hr = text.match(/(\d+(?:\.\d+)?)\s*(?:个)?\s*小时/);
+  const half = /半小时/.test(text);
+  if (min) r.duration = Math.round(Number(min[1]));
+  else if (hr) r.duration = Math.round(Number(hr[1]) * 60);
+  else if (half) r.duration = 30;
+  // 体温：37.2度 / 37.5℃
+  const tp = text.match(/(\d{2}(?:\.\d+)?)\s*(度|℃|°c|C)/i);
+  if (tp) r.temp = Number(tp[1]);
+  // 体重：6.5kg / 13斤
+  const kg = text.match(/(\d+(?:\.\d+)?)\s*(kg|公斤|千克)/i);
+  const jin = text.match(/(\d+(?:\.\d+)?)\s*斤/);
+  if (kg) r.data.weight = Number(kg[1]);
+  else if (jin) r.data.weight = Math.round(Number(jin[1]) * 0.5 * 100) / 100;
+
+  // —— 品牌/段数：优先默认品牌，再从话里提取 ——
+  const brandM = text.match(/(飞鹤|美赞臣|美素佳儿|美素|a2|爱他美|金领冠|君乐宝|伊利|雀巢|合生元|惠氏|雅培|荷兰牛栏|新西兰)|(\d)\s*段/i);
+  if (r.type === 'formula') {
+    let brand = state.settings.defaultBrand || '';
+    // 若话里明确说了品牌或段数，用它覆盖
+    if (brandM) {
+      const bn = brandM[1] || '';
+      const stage = brandM[2] ? brandM[2] + '段' : '';
+      brand = (bn + stage).trim() || brand;
+    }
+    r.brand = brand;
+  }
+
+  // —— 时间词（相对当前时间）——
+  let ts = Date.now();
+  if (/昨天/.test(text)) ts -= 86400000;
+  const clock = text.match(/(?:(\d{1,2})[点:：](\d{1,2})?)/);
+  if (clock) {
+    const d = new Date(ts);
+    d.setHours(Math.min(23, Number(clock[1])), Number(clock[2] || 0), 0, 0);
+    ts = d.getTime();
+  }
+  r.timestamp = ts;
+  return r;
+}
+
+let voiceRecognition = null;
+function openVoiceSheet() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  openSheet(`<div class="sheet-handle"></div>
+    <div class="sheet-head"><span class="sh-ico" style="background:#8fa9e822;color:#8fa9e8">🎤</span><h2>语音速记</h2><button class="close" data-act="close-overlay">✕</button></div>
+    <p class="about-text" style="margin:0 0 12px">在下面输入或说出你要记的事，比如「喝了120ml飞鹤」「宝宝尿尿了」「体温37.5」。点识别后会自动填好表单，确认即可。</p>
+    ${SR ? `<button type="button" class="btn ghost" data-act="voice-start" style="width:100%;margin-bottom:10px">🎙️ 点这里直接说话（应用内识别）</button>` : ''}
+    <form id="voice-form">
+      ${formField('说 / 输入内容', `<textarea name="text" id="voice-text" rows="3" placeholder="例如：喝了120ml飞鹤1段&#10;（点输入框调出键盘后，可用输入法的麦克风说话）"></textarea>`)}
+      <button type="submit" class="btn" style="margin-top:6px;width:100%">✨ 识别并填写</button>
+    </form>`);
+
+  // 应用内语音（若浏览器支持）
+  const startBtn = document.querySelector('[data-act="voice-start"]');
+  if (startBtn && SR) {
+    startBtn.addEventListener('click', () => {
+      try {
+        if (voiceRecognition) { voiceRecognition.stop(); return; }
+        const rec = new SR();
+        rec.lang = 'zh-CN'; rec.interimResults = false; rec.continuous = false;
+        startBtn.textContent = '🔴 正在听…说完点此停止';
+        rec.onresult = (ev) => {
+          const txt = Array.from(ev.results).map((x) => x[0].transcript).join('');
+          const box = $('#voice-text'); if (box) box.value = txt;
+        };
+        rec.onerror = (ev) => { toast('语音识别失败：' + (ev.error || '未知')); };
+        rec.onend = () => { voiceRecognition = null; startBtn.textContent = '🎙️ 点这里直接说话（应用内识别）'; };
+        voiceRecognition = rec; rec.start();
+      } catch (err) { toast('此浏览器无法使用应用内语音，请用输入法麦克风'); }
+    });
+  }
+
+  $('#voice-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = e.target.elements.text.value.trim();
+    const parsed = parseVoiceText(text);
+    if (!parsed) { toast('请先说点什么'); return; }
+    openVoiceConfirm(parsed);
+  });
+}
+
+// 把解析结果填进对应的记录表单，让用户确认/编辑后保存
+function openVoiceConfirm(p) {
+  const type = p.type;
+  const t = TYPES[type];
+  const d = p.data || {};
+  if (type === 'formula') { d.amount = p.amount || state.settings.defaultMl || 120; d.brand = p.brand || ''; }
+  if (type === 'breast') d.duration = p.duration || 15;
+  if (type === 'sleep') d.duration = p.duration || 120;
+  if (type === 'health') d.temp = p.temp || '';
+  const html = sheetHead(type, '确认记录 · ' + t.name) +
+    `<div class="voice-parsed">已从「${esc(p.note)}」识别：</div>` +
+    `<form id="record-form">${recordForm(type, { timestamp: p.timestamp, data: d, note: '' })}` +
+    `<div class="btn-row"><button type="button" class="btn ghost" data-act="voice-back">重新说</button><button type="submit" class="btn">确认保存</button></div></form>`;
+  openSheet(html);
+  $('#record-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const get = (n) => form.elements[n]?.value?.trim() || '';
+    const num = (n) => Number(get(n)) || 0;
+    const data = {};
+    for (const el of form.querySelectorAll('[data-chip]')) data[el.dataset.chip] = el.querySelector('.chip.active')?.dataset.value || '';
+    let timestamp = get('time') ? fromLocalInput(get('time')) : Date.now();
+    if (type === 'growth') { const date = get('date') || dayKey(Date.now()); data.date = date; timestamp = new Date(date + 'T12:00').getTime(); }
+    const fields = { breast: ['duration'], formula: ['amount', 'brand'], poop: [], pee: [], sleep: ['duration', 'quality'], solid: ['food', 'amount'], health: ['temp', 'symptom', 'medicine'], growth: ['weight', 'height', 'head'], note: ['text'] }[type] || [];
+    fields.forEach((f) => { data[f] = get(f); });
+    const numberFields = { breast: ['duration'], formula: ['amount'], sleep: ['duration'], health: ['temp'], growth: ['weight', 'height', 'head'] }[type] || [];
+    numberFields.forEach((f) => { if (data[f] !== '') data[f] = num(f); });
+    const record = { id: uid(), type, timestamp, data, note: get('note'), createdAt: Date.now(), updatedAt: Date.now() };
+    await Store.save(record);
+    state.events.push(record); state.events.sort((a, b) => b.timestamp - a.timestamp);
+    scheduleAutoBackup(); closeSheet(); render(); toast('语音记录已保存');
+  });
+}
+
 function openBaby() {
   const s = state.settings;
   openSheet(`<div class="sheet-handle"></div>
@@ -1110,6 +1263,8 @@ document.addEventListener('click', async (e) => {
         break;
       case 'install-guide': openInstallGuide(); break;
       case 'force-update': forceUpdateApp(); break;
+      case 'voice': openVoiceSheet(); break;
+      case 'voice-back': if (voiceRecognition) { voiceRecognition.stop(); } openVoiceSheet(); break;
       case 'edit-default-ml': openEditDefaultMl(); break;
       case 'ml-step':
         { const input = el.parentElement.querySelector('input'); input.value = Math.max(1, (Number(input.value) || 0) + Number(el.dataset.d)); }
