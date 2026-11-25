@@ -325,7 +325,6 @@ function renderHome() {
   const today = state.events.filter((e) => isToday(e.timestamp));
   const count = (types) => today.filter((e) => types.includes(e.type)).length;
   const ml = today.filter((e) => e.type === 'formula').reduce((s, e) => s + (Number(e.data?.amount) || 0), 0);
-  const min = today.filter((e) => e.type === 'breast').reduce((s, e) => s + (Number(e.data?.duration) || 0), 0);
   const recent = state.events.slice(0, 5);
   const todayFeeds = today.filter(isFeed);
   const lastFeed = state.events.find(isFeed) || null;
@@ -366,9 +365,7 @@ function renderHome() {
     <div class="card">
       <div class="card-title">今日概览 <span class="more">${fmtDate(Date.now())}</span></div>
       <div class="stat-strip">
-        ${state.settings.showBreast
-          ? `<div class="stat-cell"><div class="v" style="color:${TYPES.breast.color}">${count(['breast'])}</div><div class="l">母乳 ${min}分</div></div>`
-          : `<div class="stat-cell"><div class="v" style="color:${TYPES.solid.color}">${count(['solid'])}</div><div class="l">辅食 次</div></div>`}
+        <div class="stat-cell"><div class="v" style="color:${TYPES.solid.color}">${count(['solid'])}</div><div class="l">辅食 次</div></div>
         <div class="stat-cell"><div class="v" style="color:${TYPES.formula.color}">${ml}</div><div class="l">奶粉 ml</div></div>
         <div class="stat-cell"><div class="v" style="color:${TYPES.pee.color}">${count(['pee'])}</div><div class="l">尿尿</div></div>
         <div class="stat-cell"><div class="v" style="color:${TYPES.poop.color}">${count(['poop'])}</div><div class="l">臭臭</div></div>
