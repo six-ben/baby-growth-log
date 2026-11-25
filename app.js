@@ -38,6 +38,49 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&':
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const pad = (n) => String(n).padStart(2, '0');
 
+/* 图片：压缩为 data URL（最长边 1280，JPEG 0.72），约 100~250KB/张，完全本地处理 */
+function compressImage(file, maxSide = 1280, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)) { reject(new Error('不是图片文件')); return; }
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('读取图片失败'));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('图片解码失败'));
+      img.onload = () => {
+        try {
+          let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+          const scale = Math.min(1, maxSide / Math.max(w, h));
+          w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); // 透明底转白，避免 JPEG 发黑
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch (e) { reject(e); }
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+/* localStorage 镜像剥离图片本体（只留标记），避免 5MB 配额被大图撑爆；图片本体存 IndexedDB */
+function stripPhotosForMirror(events) {
+  return events.map((ev) => {
+    if (!ev || !ev.data || !Array.isArray(ev.data.photos) || !ev.data.photos.length) return ev;
+    return { ...ev, data: { ...ev.data, photos: ev.data.photos.map((p) => ({ id: p.id, name: p.name || '', mirrorOnly: true })) } };
+  });
+}
+/* 从镜像与 IndexedDB 合并后的记录里，若镜像版图片被剥离而 IndexedDB 版有本体，优先保留本体 */
+function mergePhotoBodies(prefer, fallback) {
+  if (!prefer || !fallback || !fallback.data || !Array.isArray(fallback.data.photos)) return prefer;
+  if (!prefer.data || !Array.isArray(prefer.data.photos)) return prefer;
+  if (prefer.data.photos.some((p) => p.data)) return prefer;
+  if (!fallback.data.photos.some((p) => p.data)) return prefer;
+  return { ...prefer, data: { ...prefer.data, photos: fallback.data.photos } };
+}
+
 function dayKey(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -175,7 +218,8 @@ const Store = {
   },
   /* localStorage 安全读写（空间满时不抛错） */
   lsEvents() { try { const a = JSON.parse(localStorage.getItem(LS_EVENTS) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } },
-  lsSetEvents(a) { try { localStorage.setItem(LS_EVENTS, JSON.stringify(a)); return true; } catch (e) { console.warn('本地存储空间不足，镜像未更新', e); return false; } },
+  // 降级模式（IndexedDB 不可用）下 localStorage 是唯一存储，必须保留图片本体；正常模式下剥离图片防止撑爆 5MB
+  lsSetEvents(a) { try { localStorage.setItem(LS_EVENTS, JSON.stringify(this.fallback ? a : stripPhotosForMirror(a))); return true; } catch (e) { console.warn('本地存储空间不足，镜像未更新（照片请导出 JSON 备份）', e); return false; } },
   lsSettings() { try { const o = JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}'); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } },
   lsSetSettings(o) { try { localStorage.setItem(LS_SETTINGS, JSON.stringify(o)); } catch (e) {} },
 
@@ -191,6 +235,11 @@ const Store = {
       if (!prev || (ev.updatedAt || ev.createdAt || 0) >= (prev.updatedAt || prev.createdAt || 0)) map.set(ev.id, ev);
     });
     const all = [...map.values()];
+    // 若镜像里的图片被剥离，用 IndexedDB 里的本体补回
+    if (idb.length) {
+      const byId = new Map(idb.filter((e) => e && e.id).map((e) => [e.id, e]));
+      for (let i = 0; i < all.length; i++) all[i] = mergePhotoBodies(all[i], byId.get(all[i].id));
+    }
     // 自愈：补全到两边
     this.lsSetEvents(all);
     if (!this.fallback) { try { await this.txDone('events', 'readwrite', (s) => all.forEach((ev) => s.put(ev))); } catch (e) {} }
@@ -311,15 +360,19 @@ function eventRow(ev, gapMs = null) {
   const detail = summary(ev) || (ev.note ? esc(ev.note) : t.name);
   const gapHtml = (gapMs != null && gapMs >= 0)
     ? `<span class="event-gap">⏱ 距上条${TYPES[ev.type]?.short || ''} ${fmtGap(gapMs)}</span>` : '';
-  return `<button class="event-row" data-act="edit" data-id="${ev.id}" style="width:100%;text-align:left">
+  const photos = Array.isArray(ev.data?.photos) ? ev.data.photos.filter((p) => p && p.data) : [];
+  const photoHtml = photos.length
+    ? `<span class="event-photos">${photos.slice(0, 3).map((p, i) => `<img src="${p.data}" data-act="view-record-photo" data-id="${ev.id}" data-index="${i}" alt="照片">`).join('')}${photos.length > 3 ? `<span class="ep-more">+${photos.length - 3}</span>` : ''}</span>` : '';
+  return `<div class="event-row" data-act="edit" data-id="${ev.id}">
     <span class="event-ico" style="background:${t.color}22;color:${t.color}">${t.icon}</span>
     <span class="event-main">
       <span class="event-title">${esc(t.name)}</span>
       <span class="event-detail">${esc(detail)}</span>
       ${gapHtml}
+      ${photoHtml}
     </span>
     <span class="event-time">${fmtTime(ev.timestamp)}</span>
-  </button>`;
+  </div>`;
 }
 function renderHome() {
   const today = state.events.filter((e) => isToday(e.timestamp));
@@ -720,9 +773,12 @@ async function exportJSON() {
   if (r.ok) { await markBackedUp(); render(); toast(r.where); }
 }
 function exportCSV() {
-  const rows = [['时间', '类型', '内容', '备注', '原始数据']];
+  const rows = [['时间', '类型', '内容', '备注', '原始数据', '照片数']];
   state.events.slice().reverse().forEach((e) => {
-    rows.push([fmtFull(e.timestamp), TYPES[e.type]?.name || e.type, summary(e), e.note || '', JSON.stringify(e.data || {})]);
+    const d = { ...(e.data || {}) };
+    const photoCount = Array.isArray(d.photos) ? d.photos.filter((p) => p && p.data).length : 0;
+    delete d.photos; // CSV 不含图片本体，避免撑爆表格；完整图片在 JSON 备份里
+    rows.push([fmtFull(e.timestamp), TYPES[e.type]?.name || e.type, summary(e), e.note || '', JSON.stringify(d), photoCount]);
   });
   const csv = '\ufeff' + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
   saveFile(`宝宝记录-${dayKey(Date.now())}.csv`, csv, 'text/csv;charset=utf-8').then((r) => { if (r.ok) toast(r.where); });
@@ -771,7 +827,7 @@ function renderData() {
     <div class="card">
       <div class="card-title">存储情况</div>
       <div class="setting-row"><div class="sr-body"><div class="sr-title">记录数量</div><div class="sr-desc">日常数据保存在本机数据库中</div></div><div class="sr-val">${state.events.length} 条</div></div>
-      <div class="setting-row"><div class="sr-body"><div class="sr-title">占用空间</div></div><div class="sr-val">${(bytes / 1024).toFixed(1)} KB</div></div>
+      <div class="setting-row"><div class="sr-body"><div class="sr-title">占用空间</div><div class="sr-desc">含照片，照片会自动压缩后存在本机</div></div><div class="sr-val">${(bytes / 1024 / 1024).toFixed(1)} MB</div></div>
       <div class="setting-row"><div class="sr-body"><div class="sr-title">最早记录</div></div><div class="sr-val">${first ? fmtDate(first) : '—'}</div></div>
       <button class="link-danger" data-act="clear">清空所有记录</button>
     </div>
@@ -957,6 +1013,38 @@ function chipField(name, options, value) {
 function formField(label, inner) { return `<div class="field"><label>${label}</label>${inner}</div>`; }
 function timeField(value) { return `<input type="datetime-local" name="time" value="${toLocalInput(value)}">`; }
 
+/* 表单中的图片字段：缩略图可点开看大图，最多 6 张 */
+let formPhotos = []; // 当前表单待保存的图片数组
+function photoFieldHtml() {
+  const thumbs = formPhotos.map((p, i) => `<div class="photo-thumb">
+      <img src="${p.data}" data-act="view-photo" data-index="${i}" alt="照片 ${i + 1}">
+      <button type="button" class="photo-del" data-act="remove-photo" data-index="${i}" aria-label="删除照片">✕</button>
+    </div>`).join('');
+  return `<div class="field"><label>照片（选填，最多 6 张）</label>
+    <div class="photo-grid" id="photo-grid">${thumbs}</div>
+    <button type="button" class="photo-add" data-act="pick-photos">＋ 添加照片</button>
+    <input type="file" id="photo-input" accept="image/*" multiple hidden>
+  </div>`;
+}
+function renderPhotoGrid() {
+  const grid = $('#photo-grid');
+  if (!grid) return;
+  grid.innerHTML = formPhotos.map((p, i) => `<div class="photo-thumb">
+      <img src="${p.data}" data-act="view-photo" data-index="${i}" alt="照片 ${i + 1}">
+      <button type="button" class="photo-del" data-act="remove-photo" data-index="${i}" aria-label="删除照片">✕</button>
+    </div>`).join('');
+}
+function openPhotoViewer(index, photos) {
+  const list = photos || formPhotos;
+  const p = list[index];
+  if (!p) return;
+  $('#dialog-root').innerHTML = `<div class="overlay photo-viewer" data-act="close-photo-viewer">
+    <button class="pv-close" data-act="close-photo-viewer" aria-label="关闭">✕</button>
+    <img src="${p.data}" alt="照片">
+    ${list.length > 1 ? `<div class="pv-count">${index + 1} / ${list.length}</div>` : ''}
+  </div>`;
+}
+
 function recordForm(type, ev) {
   const d = ev?.data || {};
   const t = ev?.timestamp || Date.now();
@@ -1017,6 +1105,7 @@ function recordForm(type, ev) {
       break;
   }
   body += formField('备注（选填）', `<textarea name="note" placeholder="其他想补充的…">${esc(note)}</textarea>`);
+  body += photoFieldHtml();
   return body;
 }
 
@@ -1032,12 +1121,30 @@ function sheetHead(type, title) {
 function openRecord(type, id) {
   const ev = id ? state.events.find((e) => e.id === id) : null;
   const t = TYPES[type];
+  formPhotos = (ev?.data?.photos || []).map((p) => ({ ...p }));
   const html = sheetHead(type, (ev ? '编辑' : '记录') + t.name) +
     `<form id="record-form">${recordForm(type, ev)}` +
     `<div class="btn-row"><button type="button" class="btn ghost" data-act="close-overlay">取消</button><button type="submit" class="btn">保存记录</button></div>` +
     (ev ? `<button type="button" class="link-danger" data-act="delete" data-id="${ev.id}">删除这条记录</button>` : '') +
     `</form>`;
   openSheet(html);
+  // 选图：本地压缩后放入待保存数组
+  const fileInput = $('#photo-input');
+  if (fileInput) fileInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!files.length) return;
+    toast('正在压缩照片…');
+    for (const f of files) {
+      if (formPhotos.length >= 6) { toast('每条记录最多 6 张照片'); break; }
+      try {
+        const data = await compressImage(f);
+        formPhotos.push({ id: uid(), name: f.name || '', data });
+      } catch (err) { console.warn('图片压缩失败', err); toast('有一张图片处理失败'); }
+    }
+    renderPhotoGrid();
+    if (formPhotos.length) toast('照片已添加');
+  });
   $('#record-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -1067,6 +1174,8 @@ function openRecord(type, id) {
 
     const record = ev ? { ...ev } : { id: uid(), createdAt: Date.now() };
     record.type = type; record.timestamp = timestamp; record.data = data;
+    if (formPhotos.length) data.photos = formPhotos.map((p) => ({ ...p }));
+    else delete data.photos;
     record.note = get('note'); record.updatedAt = Date.now();
     await Store.save(record);
     const idx = state.events.findIndex((x) => x.id === record.id);
@@ -1297,6 +1406,18 @@ document.addEventListener('click', async (e) => {
       case 'confirm-ok':
         { const fn = state.confirmFn; $('#dialog-root').innerHTML = ''; state.confirmFn = null; if (fn) await fn(); }
         break;
+      case 'pick-photos': document.getElementById('photo-input')?.click(); break;
+      case 'remove-photo':
+        formPhotos.splice(Number(el.dataset.index), 1); renderPhotoGrid(); break;
+      case 'view-photo': openPhotoViewer(Number(el.dataset.index)); break;
+      case 'view-record-photo': {
+        const rEv = state.events.find((x) => x.id === el.dataset.id);
+        const rPhotos = (rEv?.data?.photos || []).filter((p) => p && p.data);
+        openPhotoViewer(Number(el.dataset.index), rPhotos); break;
+      }
+      case 'close-photo-viewer':
+        if (el.classList.contains('overlay') && e.target !== el) break;
+        $('#dialog-root').innerHTML = ''; break;
       case 'chip':
         el.parentElement.querySelectorAll('.chip').forEach((c) => c.classList.remove('active'));
         el.classList.add('active'); break;
