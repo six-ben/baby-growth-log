@@ -15,8 +15,12 @@ const TYPES = {
 };
 const CORE = ['breast', 'formula', 'pee', 'poop'];
 const EXTRA = ['sleep', 'solid', 'health', 'growth', 'note'];
+// 母乳可隐藏：隐藏时辅食顶替到第一排，母乳从快捷区移除（数据不删）
+function coreTypes() { return state.settings.showBreast ? CORE : ['formula', 'solid', 'pee', 'poop']; }
+function extraTypes() { return state.settings.showBreast ? EXTRA : ['sleep', 'health', 'growth', 'note']; }
 const FEED_TYPES = ['breast', 'formula'];
-const isFeed = (e) => !!e && FEED_TYPES.includes(e.type);
+// 母乳隐藏时，喝奶间隔只按奶粉计算
+const isFeed = (e) => !!e && (state.settings.showBreast ? FEED_TYPES.includes(e.type) : e.type === 'formula');
 const GROUPS = [
   { name: '喂养', types: ['breast', 'formula'], color: '#ff9aa2' },
   { name: '尿布', types: ['pee', 'poop'], color: '#f5cd57' },
@@ -114,7 +118,7 @@ function summary(ev) {
     case 'poop': return [d.amount, d.color, d.texture].filter(Boolean).join(' · ');
     case 'pee': return `${d.amount || '中等'}`;
     case 'sleep': return `睡了 ${fmtDuration(d.duration)}`;
-    case 'solid': return [d.food, d.amount].filter(Boolean).join(' · ');
+    case 'solid': return [d.meal, d.food, d.amount, d.accept].filter(Boolean).join(' · ');
     case 'health': return [d.temp ? `体温 ${d.temp}℃` : '', d.symptom, d.medicine].filter(Boolean).join(' · ');
     case 'growth': return [d.weight ? `体重 ${d.weight}kg` : '', d.height ? `身长 ${d.height}cm` : '', d.head ? `头围 ${d.head}cm` : ''].filter(Boolean).join(' · ');
     case 'note': return d.text || '';
@@ -231,7 +235,7 @@ let deferredPrompt = null; // 浏览器提供的「安装到桌面」事件（�
 const state = {
   tab: 'home',
   events: [],
-  settings: { name: '宝宝', birth: '', quickAdd: false, theme: 'light', lastBackupAt: 0, backupDirName: '', defaultMl: 120, defaultBrand: '', autoBackup: false },
+  settings: { name: '宝宝', birth: '', quickAdd: false, theme: 'light', lastBackupAt: 0, backupDirName: '', defaultMl: 120, defaultBrand: '', autoBackup: false, showBreast: false },
   backupHandle: null,
   timelineFilter: 'all',
   statsRange: 7,
@@ -353,15 +357,17 @@ function renderHome() {
         <span class="voice-txt"><b>语音速记</b><small>说一句「喝了120ml」，自动识别成记录</small></span>
         <span class="voice-arrow">›</span>
       </button>
-      <div class="quick-grid">${CORE.map((t) => quickButton(t)).join('')}</div>
+      <div class="quick-grid">${coreTypes().map((t) => quickButton(t)).join('')}</div>
       <div class="section-label">更多记录</div>
-      <div class="quick-sub" style="grid-template-columns:repeat(5,1fr)">${EXTRA.map((t) => quickButton(t, true)).join('')}</div>
+      <div class="quick-sub" style="grid-template-columns:repeat(${extraTypes().length},1fr)">${extraTypes().map((t) => quickButton(t, true)).join('')}</div>
     </div>
 
     <div class="card">
       <div class="card-title">今日概览 <span class="more">${fmtDate(Date.now())}</span></div>
       <div class="stat-strip">
-        <div class="stat-cell"><div class="v" style="color:${TYPES.breast.color}">${count(['breast'])}</div><div class="l">母乳 ${min}分</div></div>
+        ${state.settings.showBreast
+          ? `<div class="stat-cell"><div class="v" style="color:${TYPES.breast.color}">${count(['breast'])}</div><div class="l">母乳 ${min}分</div></div>`
+          : `<div class="stat-cell"><div class="v" style="color:${TYPES.solid.color}">${count(['solid'])}</div><div class="l">辅食 次</div></div>`}
         <div class="stat-cell"><div class="v" style="color:${TYPES.formula.color}">${ml}</div><div class="l">奶粉 ml</div></div>
         <div class="stat-cell"><div class="v" style="color:${TYPES.pee.color}">${count(['pee'])}</div><div class="l">尿尿</div></div>
         <div class="stat-cell"><div class="v" style="color:${TYPES.poop.color}">${count(['poop'])}</div><div class="l">臭臭</div></div>
@@ -369,7 +375,7 @@ function renderHome() {
     </div>
 
     <div class="card feed-gap-card">
-      <div class="card-title">喝奶间隔 <span class="more">母乳 + 奶粉</span></div>
+      <div class="card-title">喝奶间隔 <span class="more">${state.settings.showBreast ? '母乳 + 奶粉' : '奶粉'}</span></div>
       <div class="gap-hero">
         <div class="gap-big">${lastFeed && sinceLast != null && sinceLast >= 0 ? fmtGap(sinceLast) : '—'}</div>
         <div class="gap-sub">${lastFeed ? `距上次喝奶 · ${fmtTime(lastFeed.timestamp)} 记录` : '还没有喝奶记录'}</div>
@@ -389,6 +395,9 @@ function renderHome() {
 
 /* ---------------- 页面：时间线 ---------------- */
 function renderTimeline() {
+  // 母乳隐藏时，若当前筛选是母乳则回退到全部（须在过滤前修正）
+  const visibleTypeKeys = Object.keys(TYPES).filter((k) => state.settings.showBreast || k !== 'breast');
+  if (!visibleTypeKeys.includes(state.timelineFilter)) state.timelineFilter = 'all';
   const f = state.timelineFilter;
   let list = state.events;
   if (f !== 'all') list = list.filter((e) => e.type === f);
@@ -404,7 +413,7 @@ function renderTimeline() {
     }
     html += eventRow(ev, feedGapBefore(list, i));
   }
-  const chips = [{ id: 'all', name: '全部' }].concat(Object.keys(TYPES).map((k) => ({ id: k, name: TYPES[k].short })));
+  const chips = [{ id: 'all', name: '全部' }].concat(visibleTypeKeys.map((k) => ({ id: k, name: TYPES[k].short })));
   $('#page').innerHTML = `
     <div class="card" style="padding:12px">
       <div class="chip-group">${chips.map((c) => `<button class="chip ${f === c.id ? 'active' : ''}" data-act="filter" data-id="${c.id}">${c.name}</button>`).join('')}</div>
@@ -561,7 +570,7 @@ function renderStats() {
       <div class="metric"><div class="m-label">日均尿布</div><div class="m-value">${avg(diaperCount)}<span class="m-unit">次/天</span></div></div>
       <div class="metric"><div class="m-label">日均睡眠</div><div class="m-value">${avg(sleepMin / 60)}<span class="m-unit">小时/天</span></div></div>
       <div class="metric" style="grid-column:span 2">
-        <div class="m-label">平均喝奶间隔 <span style="font-weight:400">· 相邻两次母乳或奶粉</span></div>
+        <div class="m-label">平均喝奶间隔 <span style="font-weight:400">· 相邻两次${state.settings.showBreast ? '母乳或奶粉' : '奶粉'}</span></div>
         <div class="m-value">${gapAvg != null ? fmtGap(gapAvg) : '—'}</div>
       </div>
     </div>
@@ -573,9 +582,9 @@ function renderStats() {
     </div>
 
     <div class="card">
-      <div class="card-title">母乳时长 <span class="more">共 ${fmtDuration(breastMin)}</span></div>
-      <div class="chart-wrap">${lineChartSVG(days, days.map((d) => filtered.filter((e) => e.type === 'breast' && dayKey(e.timestamp) === d.key).reduce((s, e) => s + (Number(e.data?.duration) || 0), 0)), TYPES.breast.color, '分钟')}</div>
-      <div class="card-title" style="margin-top:12px">奶粉奶量 <span class="more">共 ${formulaMl} ml</span></div>
+      ${state.settings.showBreast ? `<div class="card-title">母乳时长 <span class="more">共 ${fmtDuration(breastMin)}</span></div>
+      <div class="chart-wrap">${lineChartSVG(days, days.map((d) => filtered.filter((e) => e.type === 'breast' && dayKey(e.timestamp) === d.key).reduce((s, e) => s + (Number(e.data?.duration) || 0), 0)), TYPES.breast.color, '分钟')}</div>` : ''}
+      <div class="card-title"${state.settings.showBreast ? ' style="margin-top:12px"' : ''}>奶粉奶量 <span class="more">共 ${formulaMl} ml</span></div>
       <div class="chart-wrap">${lineChartSVG(days, days.map((d) => filtered.filter((e) => e.type === 'formula' && dayKey(e.timestamp) === d.key).reduce((s, e) => s + (Number(e.data?.amount) || 0), 0)), TYPES.formula.color, 'ml')}</div>
     </div>
 
@@ -791,6 +800,10 @@ function renderSettings() {
         <button class="switch ${s.quickAdd ? 'on' : ''}" data-act="toggle-quick" aria-label="一键记录开关"></button>
       </div>
       <div class="setting-row">
+        <span class="sr-ico">🤱</span><span class="sr-body"><span class="sr-title">显示母乳记录</span><span class="sr-desc">默认关闭，母乳入口不显示；开启后回到快捷区，已有记录一直保留</span></span>
+        <button class="switch ${s.showBreast ? 'on' : ''}" data-act="toggle-breast" aria-label="母乳记录开关"></button>
+      </div>
+      <div class="setting-row">
         <span class="sr-ico">🌙</span><span class="sr-body"><span class="sr-title">深色模式</span><span class="sr-desc">夜间查看更护眼</span></span>
         <button class="switch ${s.theme === 'dark' ? 'on' : ''}" data-act="toggle-theme" aria-label="深色模式开关"></button>
       </div>
@@ -981,11 +994,16 @@ function recordForm(type, ev) {
         formField('时长（分钟）', `<input type="number" name="duration" inputmode="numeric" min="1" max="1200" value="${d.duration || 120}">`) +
         formField('睡眠质量', chipField('quality', ['很好', '一般', '不安稳'], d.quality));
       break;
-    case 'solid':
+    case 'solid': {
+      const commonFoods = ['米粉', '果泥', '蛋黄', '蔬菜泥', '肉泥', '粥', '面条', '米饭'];
       body = formField('时间', timeField(t)) +
+        formField('餐次', chipField('meal', ['早餐', '午餐', '晚餐', '加餐'], d.meal)) +
         formField('食物', `<input type="text" name="food" value="${esc(d.food || '')}" placeholder="例如：米粉 / 苹果泥">`) +
-        formField('吃了多少', `<input type="text" name="amount" value="${esc(d.amount || '')}" placeholder="例如：半碗">`);
+        `<div class="food-presets">${commonFoods.map((f) => `<button type="button" class="chip" data-act="food-preset" data-food="${esc(f)}">${esc(f)}</button>`).join('')}</div>` +
+        formField('吃了多少', `<input type="text" name="amount" value="${esc(d.amount || '')}" placeholder="例如：半碗">`) +
+        formField('接受度', chipField('accept', ['吃得香', '一般', '不爱吃'], d.accept));
       break;
+    }
     case 'health':
       body = formField('时间', timeField(t)) +
         formField('体温（℃）', `<input type="number" name="temp" inputmode="decimal" step="0.1" value="${d.temp || ''}" placeholder="例如：37.2">`) +
@@ -1078,11 +1096,13 @@ function parseVoiceText(raw) {
     { type: 'poop',    re: /(大便|臭臭|拉屎|便便|拉了|拉臭|屎)/ },
     { type: 'pee',     re: /(尿尿|小便|嘘嘘|尿了|尿布|撒尿)/ },
     { type: 'sleep',   re: /(睡觉|睡着了|入睡|睡眠|午睡|睡了.*小时|夜觉)/ },
-    { type: 'solid',   re: /(辅食|米粉|果泥|吃.*泥|添加辅食|吃辅食)/ },
+    { type: 'solid',   re: /(辅食|米粉|果泥|蛋黄|蔬菜泥|肉泥|面条|吃.*泥|添加辅食|吃辅食)/ },
     { type: 'health',  re: /(体温|发烧|发热|温度|吃药|退烧|咳嗽|感冒|用药)/ },
     { type: 'growth',  re: /(身高|体重|身长|头围|量了.*斤|公斤)/ }
   ];
   for (const rule of typeRules) {
+    // 母乳隐藏时跳过母乳识别，避免生成入口不可见的记录
+    if (rule.type === 'breast' && !state.settings.showBreast) continue;
     if (rule.re.test(text)) { r.type = rule.type; r.conf = 1; break; }
   }
 
@@ -1288,6 +1308,9 @@ document.addEventListener('click', async (e) => {
       case 'chip':
         el.parentElement.querySelectorAll('.chip').forEach((c) => c.classList.remove('active'));
         el.classList.add('active'); break;
+      case 'food-preset':
+        { const input = $('#record-form')?.elements?.food; if (input) { input.value = el.dataset.food; input.focus(); } }
+        break;
       case 'step':
         { const input = el.parentElement.querySelector('input'); input.value = Math.max(1, (Number(input.value) || 0) + Number(el.dataset.d)); }
         break;
@@ -1304,6 +1327,9 @@ document.addEventListener('click', async (e) => {
       case 'toggle-quick':
         state.settings.quickAdd = !state.settings.quickAdd;
         await Store.setSetting('quickAdd', state.settings.quickAdd); render(); break;
+      case 'toggle-breast':
+        state.settings.showBreast = !state.settings.showBreast;
+        await Store.setSetting('showBreast', state.settings.showBreast); render(); break;
       case 'toggle-theme':
         state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
         document.documentElement.dataset.theme = state.settings.theme;
@@ -1362,7 +1388,7 @@ document.addEventListener('change', async (e) => {
       await Store.save(ev); existing.add(ev.id); added++;
     }
     if (obj.settings) {
-      for (const k of ['name', 'birth', 'quickAdd', 'theme', 'defaultMl', 'defaultBrand', 'autoBackup']) {
+      for (const k of ['name', 'birth', 'quickAdd', 'theme', 'defaultMl', 'defaultBrand', 'autoBackup', 'showBreast']) {
         if (obj.settings[k] !== undefined) { state.settings[k] = obj.settings[k]; await Store.setSetting(k, obj.settings[k]); }
       }
     }

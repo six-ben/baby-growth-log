@@ -355,6 +355,11 @@ html[data-theme="dark"] .btn.danger { background: #3a2626; }
 .voice-arrow { color: var(--text-3); font-size: 20px; }
 .voice-parsed { font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 8px 12px; border-radius: 10px; margin-bottom: 12px; }
 
+/* 辅食常见食物快选 */
+.food-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 0 12px; }
+.food-presets .chip { background: var(--surface-2); }
+.food-presets .chip:active { background: var(--accent-soft); color: var(--accent); }
+
 /* 喝奶间隔 */
 .event-gap {
   display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 600;
