@@ -141,6 +141,29 @@ function avgFeedGap(list) {
   }
   return cnt ? sum / cnt : null;
 }
+/* 预测下一次喂养：取最近若干次喝奶间隔，剔除极端值后取平均，用「最后一次 + 平均间隔」推算 */
+function predictNextFeed() {
+  const feeds = state.events.filter(isFeed).sort((a, b) => b.timestamp - a.timestamp);
+  if (!feeds.length) return null;
+  const last = feeds[0];
+  const recent = feeds.slice(0, 9);
+  let gaps = [];
+  for (let i = 0; i < recent.length - 1; i++) {
+    const g = recent[i].timestamp - recent[i + 1].timestamp;
+    if (g > 20 * 60000 && g < 8 * 3600000) gaps.push(g); // 过滤过短和夜间长觉
+  }
+  if (!gaps.length) { // 全是长间隔时退回到宽松过滤
+    for (let i = 0; i < recent.length - 1; i++) {
+      const g = recent[i].timestamp - recent[i + 1].timestamp;
+      if (g > 0 && g < 24 * 3600000) gaps.push(g);
+    }
+  }
+  if (!gaps.length) return null;
+  gaps.sort((a, b) => a - b);
+  if (gaps.length >= 3) { gaps.shift(); gaps.pop(); } // 去掉最大最小，避免个别异常拉偏
+  const avgGap = Math.round(gaps.reduce((s, g) => s + g, 0) / gaps.length);
+  return { last, avgGap, dueAt: last.timestamp + avgGap, samples: gaps.length };
+}
 function ageString(birth) {
   if (!birth) return '设置生日后显示月龄';
   const b = new Date(birth), now = new Date();
@@ -383,6 +406,7 @@ function renderHome() {
   const lastFeed = state.events.find(isFeed) || null;
   const sinceLast = lastFeed ? Date.now() - lastFeed.timestamp : null;
   const avgGapToday = avgFeedGap(today);
+  const prediction = predictNextFeed();
   $('#page').innerHTML = `
     <div class="baby-card">
       <div class="baby-avatar">👶</div>
@@ -427,6 +451,23 @@ function renderHome() {
 
     <div class="card feed-gap-card">
       <div class="card-title">喝奶间隔 <span class="more">母乳 + 奶粉</span></div>
+      ${(() => {
+        if (!prediction) return `<div class="next-feed next-feed-empty">🍼 多记录几次喝奶，就能预估下次喂养时间</div>`;
+        const remaining = prediction.dueAt - Date.now();
+        const overdue = -remaining;
+        if (remaining > 0) {
+          return `<div class="next-feed">
+            <div class="nf-label">下次喂养预计</div>
+            <div class="nf-main"><span class="nf-clock">${fmtTime(prediction.dueAt)}</span><span class="nf-left">还有 ${fmtGap(remaining)}</span></div>
+            <div class="nf-foot">按最近 ${prediction.samples} 次平均间隔 ${fmtGap(prediction.avgGap)} 推算</div>
+          </div>`;
+        }
+        return `<div class="next-feed next-feed-due">
+          <div class="nf-label">已到喂养时间</div>
+          <div class="nf-main"><span class="nf-clock">该喂奶了</span><span class="nf-left">比预计晚了 ${fmtGap(overdue)}</span></div>
+          <div class="nf-foot">预计 ${fmtTime(prediction.dueAt)} · 供参考，以宝宝实际需求为准</div>
+        </div>`;
+      })()}
       <div class="gap-hero">
         <div class="gap-big">${lastFeed && sinceLast != null && sinceLast >= 0 ? fmtGap(sinceLast) : '—'}</div>
         <div class="gap-sub">${lastFeed ? `距上次喝奶 · ${fmtTime(lastFeed.timestamp)} 记录` : '还没有喝奶记录'}</div>
