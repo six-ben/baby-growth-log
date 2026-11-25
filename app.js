@@ -13,14 +13,14 @@ const TYPES = {
   growth:  { name: '成长',     short: '成长', icon: '📏', color: '#61c6d8' },
   note:    { name: '记事',     short: '记事', icon: '📝', color: '#b9a0d8' }
 };
-const CORE = ['breast', 'formula', 'pee', 'poop'];
-const EXTRA = ['sleep', 'solid', 'health', 'growth', 'note'];
-// 母乳可隐藏：隐藏时辅食顶替到第一排，母乳从快捷区移除（数据不删）
-function coreTypes() { return state.settings.showBreast ? CORE : ['formula', 'solid', 'pee', 'poop']; }
-function extraTypes() { return state.settings.showBreast ? EXTRA : ['sleep', 'health', 'growth', 'note']; }
+// 辅食为主记录；母乳固定在「更多记录」中（入口不显眼，但始终可记录）
+const CORE = ['formula', 'solid', 'pee', 'poop'];
+const EXTRA = ['sleep', 'breast', 'health', 'growth', 'note'];
+function coreTypes() { return CORE; }
+function extraTypes() { return EXTRA; }
 const FEED_TYPES = ['breast', 'formula'];
-// 母乳隐藏时，喝奶间隔只按奶粉计算
-const isFeed = (e) => !!e && (state.settings.showBreast ? FEED_TYPES.includes(e.type) : e.type === 'formula');
+// 母乳 + 奶粉都算喝奶，参与间隔计算
+const isFeed = (e) => !!e && FEED_TYPES.includes(e.type);
 const GROUPS = [
   { name: '喂养', types: ['breast', 'formula'], color: '#ff9aa2' },
   { name: '尿布', types: ['pee', 'poop'], color: '#f5cd57' },
@@ -373,7 +373,7 @@ function renderHome() {
     </div>
 
     <div class="card feed-gap-card">
-      <div class="card-title">喝奶间隔 <span class="more">${state.settings.showBreast ? '母乳 + 奶粉' : '奶粉'}</span></div>
+      <div class="card-title">喝奶间隔 <span class="more">母乳 + 奶粉</span></div>
       <div class="gap-hero">
         <div class="gap-big">${lastFeed && sinceLast != null && sinceLast >= 0 ? fmtGap(sinceLast) : '—'}</div>
         <div class="gap-sub">${lastFeed ? `距上次喝奶 · ${fmtTime(lastFeed.timestamp)} 记录` : '还没有喝奶记录'}</div>
@@ -393,8 +393,8 @@ function renderHome() {
 
 /* ---------------- 页面：时间线 ---------------- */
 function renderTimeline() {
-  // 母乳隐藏时，若当前筛选是母乳则回退到全部（须在过滤前修正）
-  const visibleTypeKeys = Object.keys(TYPES).filter((k) => state.settings.showBreast || k !== 'breast');
+  // 所有类型都可见，校验一下当前筛选是否合法
+  const visibleTypeKeys = Object.keys(TYPES);
   if (!visibleTypeKeys.includes(state.timelineFilter)) state.timelineFilter = 'all';
   const f = state.timelineFilter;
   let list = state.events;
@@ -568,7 +568,7 @@ function renderStats() {
       <div class="metric"><div class="m-label">日均尿布</div><div class="m-value">${avg(diaperCount)}<span class="m-unit">次/天</span></div></div>
       <div class="metric"><div class="m-label">日均睡眠</div><div class="m-value">${avg(sleepMin / 60)}<span class="m-unit">小时/天</span></div></div>
       <div class="metric" style="grid-column:span 2">
-        <div class="m-label">平均喝奶间隔 <span style="font-weight:400">· 相邻两次${state.settings.showBreast ? '母乳或奶粉' : '奶粉'}</span></div>
+        <div class="m-label">平均喝奶间隔 <span style="font-weight:400">· 相邻两次母乳或奶粉</span></div>
         <div class="m-value">${gapAvg != null ? fmtGap(gapAvg) : '—'}</div>
       </div>
     </div>
@@ -580,9 +580,9 @@ function renderStats() {
     </div>
 
     <div class="card">
-      ${state.settings.showBreast ? `<div class="card-title">母乳时长 <span class="more">共 ${fmtDuration(breastMin)}</span></div>
-      <div class="chart-wrap">${lineChartSVG(days, days.map((d) => filtered.filter((e) => e.type === 'breast' && dayKey(e.timestamp) === d.key).reduce((s, e) => s + (Number(e.data?.duration) || 0), 0)), TYPES.breast.color, '分钟')}</div>` : ''}
-      <div class="card-title"${state.settings.showBreast ? ' style="margin-top:12px"' : ''}>奶粉奶量 <span class="more">共 ${formulaMl} ml</span></div>
+      <div class="card-title">母乳时长 <span class="more">共 ${fmtDuration(breastMin)}</span></div>
+      <div class="chart-wrap">${lineChartSVG(days, days.map((d) => filtered.filter((e) => e.type === 'breast' && dayKey(e.timestamp) === d.key).reduce((s, e) => s + (Number(e.data?.duration) || 0), 0)), TYPES.breast.color, '分钟')}</div>
+      <div class="card-title" style="margin-top:12px">奶粉奶量 <span class="more">共 ${formulaMl} ml</span></div>
       <div class="chart-wrap">${lineChartSVG(days, days.map((d) => filtered.filter((e) => e.type === 'formula' && dayKey(e.timestamp) === d.key).reduce((s, e) => s + (Number(e.data?.amount) || 0), 0)), TYPES.formula.color, 'ml')}</div>
     </div>
 
@@ -796,10 +796,6 @@ function renderSettings() {
       <div class="setting-row">
         <span class="sr-ico">⚡</span><span class="sr-body"><span class="sr-title">尿尿 / 臭臭一键记录</span><span class="sr-desc">轻点按钮直接记录中等量，无需填写表单</span></span>
         <button class="switch ${s.quickAdd ? 'on' : ''}" data-act="toggle-quick" aria-label="一键记录开关"></button>
-      </div>
-      <div class="setting-row">
-        <span class="sr-ico">🤱</span><span class="sr-body"><span class="sr-title">显示母乳记录</span><span class="sr-desc">默认关闭，母乳入口不显示；开启后回到快捷区，已有记录一直保留</span></span>
-        <button class="switch ${s.showBreast ? 'on' : ''}" data-act="toggle-breast" aria-label="母乳记录开关"></button>
       </div>
       <div class="setting-row">
         <span class="sr-ico">🌙</span><span class="sr-body"><span class="sr-title">深色模式</span><span class="sr-desc">夜间查看更护眼</span></span>
@@ -1099,8 +1095,6 @@ function parseVoiceText(raw) {
     { type: 'growth',  re: /(身高|体重|身长|头围|量了.*斤|公斤)/ }
   ];
   for (const rule of typeRules) {
-    // 母乳隐藏时跳过母乳识别，避免生成入口不可见的记录
-    if (rule.type === 'breast' && !state.settings.showBreast) continue;
     if (rule.re.test(text)) { r.type = rule.type; r.conf = 1; break; }
   }
 
@@ -1325,9 +1319,6 @@ document.addEventListener('click', async (e) => {
       case 'toggle-quick':
         state.settings.quickAdd = !state.settings.quickAdd;
         await Store.setSetting('quickAdd', state.settings.quickAdd); render(); break;
-      case 'toggle-breast':
-        state.settings.showBreast = !state.settings.showBreast;
-        await Store.setSetting('showBreast', state.settings.showBreast); render(); break;
       case 'toggle-theme':
         state.settings.theme = state.settings.theme === 'dark' ? 'light' : 'dark';
         document.documentElement.dataset.theme = state.settings.theme;
