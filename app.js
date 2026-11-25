@@ -78,11 +78,12 @@ function fmtGap(ms) {
   const d = Math.floor(h / 24), rh = h % 24;
   return rh ? `${d}天${rh}小时` : `${d}天`;
 }
-/* 倒序列表中，第 i 条记录距上一条喝奶的间隔（毫秒）；非喝奶或无上次返回 null */
-function feedGapBefore(list, i) {
-  if (!isFeed(list[i])) return null;
+/* 倒序列表中，第 i 条记录距上一条同类型记录的间隔（毫秒）；无同类上次返回 null */
+function sameTypeGapBefore(list, i) {
+  const cur = list[i];
+  if (!cur) return null;
   for (let j = i + 1; j < list.length; j++) {
-    if (isFeed(list[j])) return list[i].timestamp - list[j].timestamp;
+    if (list[j].type === cur.type) return cur.timestamp - list[j].timestamp;
   }
   return null;
 }
@@ -308,8 +309,8 @@ function quickButton(type, sub = false) {
 function eventRow(ev, gapMs = null) {
   const t = TYPES[ev.type] || TYPES.note;
   const detail = summary(ev) || (ev.note ? esc(ev.note) : t.name);
-  const gapHtml = (isFeed(ev) && gapMs != null && gapMs >= 0)
-    ? `<span class="event-gap">⏱ 距上次 ${fmtGap(gapMs)}</span>` : '';
+  const gapHtml = (gapMs != null && gapMs >= 0)
+    ? `<span class="event-gap">⏱ 距上条${TYPES[ev.type]?.short || ''} ${fmtGap(gapMs)}</span>` : '';
   return `<button class="event-row" data-act="edit" data-id="${ev.id}" style="width:100%;text-align:left">
     <span class="event-ico" style="background:${t.color}22;color:${t.color}">${t.icon}</span>
     <span class="event-main">
@@ -388,7 +389,7 @@ function renderHome() {
 
     <div class="card">
       <div class="card-title">最近记录 <button class="more" data-act="tab" data-id="timeline">查看全部 ›</button></div>
-      ${recent.length ? `<div class="event-list">${recent.map((ev, i) => eventRow(ev, feedGapBefore(state.events, i))).join('')}</div>`
+      ${recent.length ? `<div class="event-list">${recent.map((ev, i) => eventRow(ev, sameTypeGapBefore(state.events, i))).join('')}</div>`
         : `<div class="empty"><div class="e-ico">🍼</div><p>还没有记录，点上面的按钮开始吧</p></div>`}
     </div>`;
 }
@@ -411,7 +412,7 @@ function renderTimeline() {
       html += `<div class="day-group">${label}</div>`;
       lastDay = k;
     }
-    html += eventRow(ev, feedGapBefore(list, i));
+    html += eventRow(ev, sameTypeGapBefore(list, i));
   }
   const chips = [{ id: 'all', name: '全部' }].concat(visibleTypeKeys.map((k) => ({ id: k, name: TYPES[k].short })));
   $('#page').innerHTML = `
